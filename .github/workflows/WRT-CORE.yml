@@ -85,6 +85,11 @@ jobs:
 
           sudo timedatectl set-timezone "$TZ"
 
+          #runner 预装了 .NET/Android/GHC/Boost 等一大堆用不到的东西，先删掉给编译腾空间
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost \
+            /usr/share/swift /usr/share/miniconda /opt/az /usr/local/.ghcup 2>/dev/null || true
+          df -h /
+
           #编译目录放到 /mnt，避免 / 分区空间不足
           sudo mkdir -p /mnt/build_wrt
           sudo chown "$USER":"$USER" /mnt/build_wrt
@@ -231,7 +236,27 @@ jobs:
         if: env.WRT_TEST != 'true'
         run: |
           cd ./wrt/
-          make -j$(nproc) || make -j1 V=s
+          #日志落盘，失败时下一步会上传，省得在网页里翻几万行
+          make -j$(nproc) 2>&1 | tee /tmp/build.log
+
+      - name: Collect Build Log
+        if: failure() && env.WRT_TEST != 'true'
+        run: |
+          tail -c 500000 /tmp/build.log > /tmp/build-tail.log 2>/dev/null || echo "no build log" > /tmp/build-tail.log
+          {
+            echo "======== 失败关键字 ========"
+            grep -nE "ERROR: |Error [12]$|\*\*\* .*Error|No space left|is too big|failed to build" /tmp/build.log | tail -60 || true
+          } >> /tmp/build-tail.log
+          echo "tail 大小：$(du -h /tmp/build-tail.log | cut -f1)"
+
+      - name: Upload Build Log
+        if: failure() && env.WRT_TEST != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{env.WRT_CONFIG}}-${{env.WRT_DATE}}
+          path: /tmp/build-tail.log
+          if-no-files-found: warn
+          retention-days: 3
 
       - name: Machine Information
         run: |
@@ -288,9 +313,11 @@ jobs:
             请注意选择你需要的设备固件！
 
             ### ⚠️ 京东云 AX6600（RE-CS-02 / 雅典娜）刷机前提
-            1. 必须是 **12M Kernel 分区表** 的机器（6M 分区表强刷会红灯，需要编程器救砖）
-            2. **先升级新版 u-boot**，再刷固件
-            3. 先进 u-boot Web 刷 `factory.bin`，再进 LuCI 用 sysupgrade 刷 `squashfs-sysupgrade.bin`，**不要勾选保留配置**
+            1. 本固件内核按 **6M（6144k）** 生成（`KERNEL_SIZE := 6144k`），对应社区 **6M 分区表**；如果机器之前刷过 12M 布局的固件，先到 u-boot 的 `/img.html` 刷 6M 分区表（rootfs 1024M 或 2048M）再刷固件
+            2. u-boot 需 **2024.05.10** 及以上（进 `/uboot.html` 看版本号，已经是这版就不用动）
+            3. 刷机前务必备份 `0:APPSBL`、`0:APPSBL_1`、`0:ART`、`0:CDT` 和 GPT，出问题才救得回来
+            4. 先进 u-boot Web 刷 `factory.bin`，重启进 LuCI 后用 sysupgrade 刷 `squashfs-sysupgrade.bin`，**不要勾选保留配置**
+            5. 三 radio 首次起 5.2G/HE160 要等 DFS-CAC（约 60 秒）才会出现
 
             内核版本：${{env.WRT_KVER}}
             NSS：QCA NSS 12.5 硬件加速（ECM / crypto / WiFi 卸载）
