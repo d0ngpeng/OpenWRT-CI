@@ -8,7 +8,8 @@ on:
   workflow_dispatch:
     inputs:
       NUMBER:
-        default: '0'
+        description: '保留最近几个 Release（默认 3，别设 0，不然某天编译失败就没有可刷的固件了）'
+        default: '3'
         required: false
         type: string
 
@@ -16,7 +17,7 @@ permissions: write-all
 
 jobs:
   auto_clean:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Delete old Releases and Workflows
         uses: ophub/delete-releases-workflows@main

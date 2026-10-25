@@ -1,84 +1,68 @@
 #!/bin/bash
+#在 $GITHUB_WORKSPACE/wrt/package 下执行
 
 PKG_PATH="$GITHUB_WORKSPACE/wrt/package/"
 
-#预置HomeProxy数据
-if [ -d *"homeproxy"* ]; then
+#=====================================================================
+#预置 HomeProxy 规则数据（feeds 自带 luci-app-homeproxy，路径先探测）
+#拉不到就保留包内自带规则，不影响编译
+#=====================================================================
+HP_PATH=""
+while IFS= read -r HP_DIR; do
+	if [ -d "$HP_DIR/root/etc/homeproxy/resources" ]; then
+		HP_PATH="$(cd "$HP_DIR/root/etc/homeproxy" && pwd)"
+		break
+	fi
+done < <(find . ../feeds/luci -maxdepth 5 -type d -name "*homeproxy*" 2>/dev/null || true)
+
+if [ -n "$HP_PATH" ]; then
 	HP_RULE="surge"
-	HP_PATH="homeproxy/root/etc/homeproxy"
 
-	rm -rf ./$HP_PATH/resources/*
+	rm -rf ./$HP_RULE/
+	rm -rf "$HP_PATH"/resources/*
 
-	git clone -q --depth=1 --single-branch --branch "release" "https://github.com/Loyalsoldier/surge-rules.git" ./$HP_RULE/
-	cd ./$HP_RULE/ && RES_VER=$(git log -1 --pretty=format:'%s' | grep -o "[0-9]*")
-
-	echo $RES_VER | tee china_ip4.ver china_ip6.ver china_list.ver gfw_list.ver
-	awk -F, '/^IP-CIDR,/{print $2 > "china_ip4.txt"} /^IP-CIDR6,/{print $2 > "china_ip6.txt"}' cncidr.txt
-	sed 's/^\.//g' direct.txt > china_list.txt ; sed 's/^\.//g' gfw.txt > gfw_list.txt
-	mv -f ./{china_*,gfw_list}.{ver,txt} ../$HP_PATH/resources/
-
-	cd .. && rm -rf ./$HP_RULE/
-
-	cd $PKG_PATH && echo "homeproxy date has been updated!"
+	if git clone -q --depth=1 --single-branch --branch "release" "https://github.com/Loyalsoldier/surge-rules.git" ./$HP_RULE/ 2>/dev/null; then
+		(
+			cd ./$HP_RULE/ || exit 1
+			RES_VER=$(git log -1 --pretty=format:'%s' | grep -o "[0-9]*" | head -n 1)
+			echo "$RES_VER" | tee china_ip4.ver china_ip6.ver china_list.ver gfw_list.ver
+			awk -F, '/^IP-CIDR,/{print $2 > "china_ip4.txt"} /^IP-CIDR6,/{print $2 > "china_ip6.txt"}' cncidr.txt
+			sed 's/^\.//g' direct.txt > china_list.txt
+			sed 's/^\.//g' gfw.txt > gfw_list.txt
+			#文件名必须和 homeproxy 期望的一致，否则规则加载会失败
+			mv -f ./{china_ip4,china_ip6,china_list,gfw_list}.{ver,txt} "$HP_PATH/resources/"
+		)
+		rm -rf ./$HP_RULE/
+		echo "homeproxy 规则已预置"
+	else
+		echo "homeproxy 规则拉取失败，保留包内默认"
+	fi
 fi
 
-#修改argon主题字体和颜色
-if [ -d *"luci-theme-argon"* ]; then
-	cd ./luci-theme-argon/
-
-	sed -i '/font-weight:/ {/!important/! s/\(font-weight:\s*\)[^;]*;/\1normal;/}' $(find ./luci-theme-argon -type f -iname "*.css")
-	sed -i "s/primary '.*'/primary '#31a1a1'/; s/'0.2'/'0.5'/; s/'none'/'bing'/" ./luci-app-argon-config/root/etc/config/argon
-
-	cd $PKG_PATH && echo "theme-argon has been fixed!"
+#=====================================================================
+#修改 argon 主题字体和颜色
+#=====================================================================
+ARGON_DIR=$(find . -maxdepth 2 -type d -name "luci-app-argon-config" 2>/dev/null | head -n 1 || true)
+if [ -n "$ARGON_DIR" ] && [ -d ./luci-theme-argon ]; then
+	sed -i '/font-weight:/ {/!important/! s/\(font-weight:\s*\)[^;]*;/\1normal;/}' $(find ./luci-theme-argon -type f -iname "*.css" 2>/dev/null) 2>/dev/null || true
+	sed -i "s/primary '.*'/primary '#31a1a1'/; s/'0.2'/'0.5'/; s/'none'/'bing'/" "$ARGON_DIR/root/etc/config/argon" 2>/dev/null || true
+	echo "theme-argon 已调整"
 fi
 
-#修改qca-nss-drv启动顺序
-NSS_DRV="../feeds/nss_packages/qca-nss-drv/files/qca-nss-drv.init"
-if [ -f "$NSS_DRV" ]; then
-	sed -i 's/START=.*/START=85/g' $NSS_DRV
-
-	cd $PKG_PATH && echo "qca-nss-drv has been fixed!"
+#=====================================================================
+#雅典娜 LED 脚本需要可执行权限，否则开机不亮/不生效
+#=====================================================================
+ATHENA_DIR=$(find . -maxdepth 2 -type d -name "luci-app-athena-led" 2>/dev/null | head -n 1 || true)
+if [ -n "$ATHENA_DIR" ]; then
+	chmod +x "$ATHENA_DIR"/root/etc/init.d/athena_led "$ATHENA_DIR"/root/usr/sbin/athena-led 2>/dev/null || true
+	echo "athena-led 权限已修复"
 fi
 
-#修改qca-nss-pbuf启动顺序
-NSS_PBUF="./kernel/mac80211/files/qca-nss-pbuf.init"
-if [ -f "$NSS_PBUF" ]; then
-	sed -i 's/START=.*/START=86/g' $NSS_PBUF
+#=====================================================================
+#NSS 相关不用再手改启动顺序：
+#nss-packages 里 qca-nss-drv 是 START=94、qca-nss-ecm 是 START=96，
+#顺序本来就是对的，乱改反而会和驱动加载时序打架。
+#=====================================================================
 
-	cd $PKG_PATH && echo "qca-nss-pbuf has been fixed!"
-fi
-
-#移除Shadowsocks组件
-PW_FILE=$(find ./ -maxdepth 3 -type f -wholename "*/luci-app-passwall/Makefile")
-if [ -f "$PW_FILE" ]; then
-	sed -i '/config PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev/,/x86_64/d' $PW_FILE
-	sed -i '/config PACKAGE_$(PKG_NAME)_INCLUDE_ShadowsocksR/,/default n/d' $PW_FILE
-	sed -i '/Shadowsocks_NONE/d; /Shadowsocks_Libev/d; /ShadowsocksR/d' $PW_FILE
-
-	cd $PKG_PATH && echo "passwall has been fixed!"
-fi
-
-SP_FILE=$(find ./ -maxdepth 3 -type f -wholename "*/luci-app-ssr-plus/Makefile")
-if [ -f "$SP_FILE" ]; then
-	sed -i '/default PACKAGE_$(PKG_NAME)_INCLUDE_Shadowsocks_Libev/,/libev/d' $SP_FILE
-	sed -i '/config PACKAGE_$(PKG_NAME)_INCLUDE_ShadowsocksR/,/x86_64/d' $SP_FILE
-	sed -i '/Shadowsocks_NONE/d; /Shadowsocks_Libev/d; /ShadowsocksR/d' $SP_FILE
-
-	cd $PKG_PATH && echo "ssr-plus has been fixed!"
-fi
-
-#修复TailScale配置文件冲突
-TS_FILE=$(find ../feeds/packages/ -maxdepth 3 -type f -wholename "*/tailscale/Makefile")
-if [ -f "$TS_FILE" ]; then
-	sed -i '/\/files/d' $TS_FILE
-
-	cd $PKG_PATH && echo "tailscale has been fixed!"
-fi
-
-#修复Coremark编译失败
-CM_FILE=$(find ../feeds/packages/ -maxdepth 3 -type f -wholename "*/coremark/Makefile")
-if [ -f "$CM_FILE" ]; then
-	sed -i 's/mkdir/mkdir -p/g' $CM_FILE
-
-	cd $PKG_PATH && echo "coremark has been fixed!"
-fi
+cd "$PKG_PATH" || exit 0
+echo "包处理完成"

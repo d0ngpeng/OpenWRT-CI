@@ -1,112 +1,113 @@
 #!/bin/bash
+#在 $GITHUB_WORKSPACE/wrt/package 下执行
 
-#安装和更新软件包
+set -u
+
+#删掉 feeds 里可能存在的同名/别名包，避免重复定义
+DELETE_OLD_PACKAGE() {
+	local NAME DIR
+	for NAME in "$@"; do
+		[ -n "$NAME" ] || continue
+		while IFS= read -r DIR; do
+			[ -n "$DIR" ] || continue
+			rm -rf "$DIR"
+			echo "deleted: $DIR"
+		done < <(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "$NAME" 2>/dev/null)
+	done
+}
+
+#安装/更新第三方软件包
+#用法：UPDATE_PACKAGE "包名" "仓库" "分支" ["pkg"|"name"] ["旧名字列表"]
+#  pkg  —— 大杂烩仓库，只把名字匹配的子目录抠出来
+#  name —— 把仓库目录按包名放置
+#  默认 —— 把整个仓库放到 ./<仓库名>
+#克隆失败/抠不到包时一律保留 feeds 里的原包，不会像以前那样先删后拉、拉挂了包就没了。
 UPDATE_PACKAGE() {
-	local PKG_NAME=$1
-	local PKG_REPO=$2
-	local PKG_BRANCH=$3
-	local PKG_SPECIAL=$4
-	local CUSTOM_NAMES=($5)  # 第5个参数为自定义名称列表
-	local REPO_NAME=$(echo $PKG_REPO | cut -d '/' -f 2)
+	local PKG_NAME="$1"
+	local PKG_REPO="$2"
+	local PKG_BRANCH="$3"
+	local PKG_SPECIAL="${4:-}"
+	local CUSTOM_NAMES=()
+	local REPO_NAME
+	REPO_NAME=$(echo "$PKG_REPO" | cut -d '/' -f 2)
+
+	[ -n "${5:-}" ] && read -r -a CUSTOM_NAMES <<< "$5"
+	CUSTOM_NAMES=("$PKG_NAME" "${CUSTOM_NAMES[@]}")
 
 	echo " "
+	echo "==> $PKG_NAME  ($PKG_REPO @ $PKG_BRANCH)"
 
-	# 将 PKG_NAME 加入到需要查找的名称列表中
-	if [ ${#CUSTOM_NAMES[@]} -gt 0 ]; then
-		CUSTOM_NAMES=("$PKG_NAME" "${CUSTOM_NAMES[@]}")  # 将 PKG_NAME 添加到自定义名称列表的开头
-	else
-		CUSTOM_NAMES=("$PKG_NAME")  # 如果没有自定义名称，则只使用 PKG_NAME
-	fi
-
-	# 删除本地可能存在的不同名称的软件包
-	for NAME in "${CUSTOM_NAMES[@]}"; do
-		# 查找匹配的目录
-		echo "Searching directory: $NAME"
-		local FOUND_DIRS=$(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "*$NAME*" 2>/dev/null)
-
-		# 删除找到的目录
-		if [ -n "$FOUND_DIRS" ]; then
-			echo "$FOUND_DIRS" | while read -r DIR; do
-				rm -rf "$DIR"
-				echo "Deleted directory: $DIR"
-			done
-		else
-			echo "No directories found matching name: $NAME"
+	local TMP_DIR=".clone-tmp-$REPO_NAME"
+	rm -rf "$TMP_DIR"
+	local OK=0
+	for i in 1 2 3; do
+		if git clone --depth=1 --single-branch --branch "$PKG_BRANCH" "https://github.com/$PKG_REPO.git" "$TMP_DIR" 2>/dev/null; then
+			OK=1
+			break
 		fi
+		rm -rf "$TMP_DIR"
+		sleep $((i * 3))
 	done
 
-	# 克隆 GitHub 仓库
-	git clone --depth=1 --single-branch --branch $PKG_BRANCH "https://github.com/$PKG_REPO.git"
+	if [ "$OK" != "1" ]; then
+		echo "!!! $PKG_REPO 克隆失败，跳过（保留 feeds 原包）"
+		return 1
+	fi
 
-	# 处理克隆的仓库
-	if [[ $PKG_SPECIAL == "pkg" ]]; then
-		find ./$REPO_NAME/*/ -maxdepth 3 -type d -iname "*$PKG_NAME*" -prune -exec cp -rf {} ./ \;
-		rm -rf ./$REPO_NAME/
-	elif [[ $PKG_SPECIAL == "name" ]]; then
-		mv -f $REPO_NAME $PKG_NAME
+	if [ "$PKG_SPECIAL" = "pkg" ]; then
+		#先抠包，确认抠到了再删旧包
+		local EXTRACT_DIR=".extract-$REPO_NAME"
+		rm -rf "$EXTRACT_DIR"
+		mkdir -p "$EXTRACT_DIR"
+		find "./$TMP_DIR"/*/ -maxdepth 3 -type d -iname "*$PKG_NAME*" -prune -exec cp -rf {} "$EXTRACT_DIR"/ \; 2>/dev/null
+
+		if [ -z "$(ls -A "$EXTRACT_DIR" 2>/dev/null)" ]; then
+			echo "!!! 在 $PKG_REPO 里没找到 $PKG_NAME，跳过（保留 feeds 原包）"
+			rm -rf "$TMP_DIR" "$EXTRACT_DIR"
+			return 1
+		fi
+
+		DELETE_OLD_PACKAGE "${CUSTOM_NAMES[@]}"
+		mv -f "$EXTRACT_DIR"/* ./
+		rm -rf "$TMP_DIR" "$EXTRACT_DIR"
+	elif [ "$PKG_SPECIAL" = "name" ]; then
+		DELETE_OLD_PACKAGE "${CUSTOM_NAMES[@]}"
+		rm -rf "./$PKG_NAME"
+		mv -f "$TMP_DIR" "./$PKG_NAME"
+	else
+		DELETE_OLD_PACKAGE "${CUSTOM_NAMES[@]}"
+		rm -rf "./$REPO_NAME"
+		mv -f "$TMP_DIR" "./$REPO_NAME"
 	fi
 }
 
-# 调用示例
-# UPDATE_PACKAGE "OpenAppFilter" "destan19/OpenAppFilter" "master" "" "custom_name1 custom_name2"
-# UPDATE_PACKAGE "open-app-filter" "destan19/OpenAppFilter" "master" "" "luci-app-appfilter oaf" 这样会把原有的open-app-filter，luci-app-appfilter，oaf相关组件删除，不会出现coremark错误。
+#主题：用 sbwml 的 25.12 分支（带 luci-app-argon-config，feeds 里的版本偏旧）
+UPDATE_PACKAGE "argon" "sbwml/luci-theme-argon" "openwrt-25.12" "" "luci-theme-argon luci-app-argon-config"
 
-# UPDATE_PACKAGE "包名" "项目地址" "项目分支" "pkg/name，可选，pkg为从大杂烩中单独提取包名插件；name为重命名为包名"
-UPDATE_PACKAGE "argon" "sbwml/luci-theme-argon" "openwrt-24.10"
+#京东云雅典娜 LED 控制（AX6600 灯效，源码树里没有这个包）
+UPDATE_PACKAGE "luci-app-athena-led" "NONGFAH/luci-app-athena-led" "main"
 
-UPDATE_PACKAGE "homeproxy" "VIKINGYFY/homeproxy" "main"
-UPDATE_PACKAGE "nikki" "nikkinikki-org/OpenWrt-nikki" "main"
-UPDATE_PACKAGE "openclash" "vernesong/OpenClash" "dev" "pkg"
-UPDATE_PACKAGE "passwall" "xiaorouji/openwrt-passwall" "main" "pkg"
-UPDATE_PACKAGE "ssr-plus" "fw876/helloworld" "master"
+#OpenClash：用上游 dev 分支（feeds 里的 luci-app-openclash 就是它的镜像，要先删掉避免重名）
+UPDATE_PACKAGE "openclash" "vernesong/OpenClash" "dev" "pkg" "luci-app-openclash"
 
-UPDATE_PACKAGE "alist" "sbwml/luci-app-alist" "main"
-UPDATE_PACKAGE "mosdns" "sbwml/luci-app-mosdns" "v5"
-
-UPDATE_PACKAGE "luci-app-wol" "VIKINGYFY/packages" "main" "pkg"
-UPDATE_PACKAGE "luci-app-gecoosac" "lwb1978/openwrt-gecoosac" "main"
+#Tailscale LuCI（feeds 里叫 luci-app-tailscale-community，这里用 asvow 版）
 UPDATE_PACKAGE "luci-app-tailscale" "asvow/luci-app-tailscale" "main"
 
-UPDATE_PACKAGE "lazyoop" "lazyoop/networking-artifact" "main"
+#以下默认不启用（体积/依赖会明显变大），要用的取消注释，
+#并在 Config/GENERAL.txt 里加对应的 CONFIG_PACKAGE_xxx=y
+#homeproxy / nikki / passwall 三个都带 sing-box，同时开必撞包，只留一个
+#UPDATE_PACKAGE "nikki" "nikkinikki-org/OpenWrt-nikki" "main"
+#UPDATE_PACKAGE "passwall" "Openwrt-Passwall/openwrt-passwall" "main" "pkg" "luci-app-passwall"
+#这两个仓库里本体和 LuCI 是分开的两个目录，必须用 pkg 模式整体抠出来
+#UPDATE_PACKAGE "alist" "sbwml/luci-app-alist" "main" "pkg" "luci-app-alist alist"
+#UPDATE_PACKAGE "mosdns" "sbwml/luci-app-mosdns" "v5" "pkg" "luci-app-mosdns mosdns v2dat"
+#京东云玩游戏加速
+#UPDATE_PACKAGE "gecoosac" "laipeng668/luci-app-gecoosac" "main" "pkg" "luci-app-gecoosac gecoosac"
 
+#非 immortalwrt 源才需要补 wwan 包
 if [[ $WRT_REPO != *"immortalwrt"* ]]; then
 	UPDATE_PACKAGE "qmi-wwan" "immortalwrt/wwan-packages" "master" "pkg"
 fi
 
-#更新软件包版本
-UPDATE_VERSION() {
-	local PKG_NAME=$1
-	local PKG_MARK=${2:-not}
-	local PKG_FILES=$(find ./ ../feeds/packages/ -maxdepth 3 -type f -wholename "*/$PKG_NAME/Makefile")
-
-	echo " "
-
-	if [ -z "$PKG_FILES" ]; then
-		echo "$PKG_NAME not found!"
-		return
-	fi
-
-	echo "$PKG_NAME version update has started!"
-
-	for PKG_FILE in $PKG_FILES; do
-		local PKG_REPO=$(grep -Pho 'PKG_SOURCE_URL:=https://.*github.com/\K[^/]+/[^/]+(?=.*)' $PKG_FILE | head -n 1)
-		local PKG_VER=$(curl -sL "https://api.github.com/repos/$PKG_REPO/releases" | jq -r "map(select(.prerelease|$PKG_MARK)) | first | .tag_name")
-		local NEW_VER=$(echo $PKG_VER | sed "s/.*v//g; s/_/./g")
-		local NEW_HASH=$(curl -sL "https://codeload.github.com/$PKG_REPO/tar.gz/$PKG_VER" | sha256sum | cut -b -64)
-		local OLD_VER=$(grep -Po "PKG_VERSION:=\K.*" "$PKG_FILE")
-
-		echo "$OLD_VER $PKG_VER $NEW_VER $NEW_HASH"
-
-		if [[ $NEW_VER =~ ^[0-9].* ]] && dpkg --compare-versions "$OLD_VER" lt "$NEW_VER"; then
-			sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=$NEW_VER/g" "$PKG_FILE"
-			sed -i "s/PKG_HASH:=.*/PKG_HASH:=$NEW_HASH/g" "$PKG_FILE"
-			echo "$PKG_FILE version has been updated!"
-		else
-			echo "$PKG_FILE version is already the latest!"
-		fi
-	done
-}
-
-#UPDATE_VERSION "软件包名" "测试版，true，可选，默认为否"
-UPDATE_VERSION "sing-box"
-UPDATE_VERSION "tailscale"
+echo " "
+echo "第三方包处理完成"

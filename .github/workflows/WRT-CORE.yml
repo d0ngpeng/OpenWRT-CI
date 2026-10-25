@@ -54,68 +54,101 @@ env:
   WRT_BRANCH: ${{inputs.WRT_BRANCH}}
   WRT_PACKAGE: ${{inputs.WRT_PACKAGE}}
   WRT_TEST: ${{inputs.WRT_TEST}}
+  TZ: Asia/Shanghai
 
 jobs:
   core:
-    name: ${{inputs.WRT_SOURCE}}
-    runs-on: ubuntu-22.04
+    name: ${{inputs.WRT_SOURCE || inputs.WRT_REPO}}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
     steps:
       - name: Checkout Projects
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Initialization Environment
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt -yqq update
-          sudo -E apt -yqq full-upgrade
-          sudo -E apt -yqq autoremove --purge
-          sudo -E apt -yqq autoclean
-          sudo -E apt -yqq clean
-          sudo -E apt -yqq install dos2unix libfuse-dev
-          sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
-          sudo -E systemctl daemon-reload
-          sudo -E timedatectl set-timezone "Asia/Shanghai"
+          sudo -E apt-get -yq update
+          sudo -E apt-get -yq install --no-install-recommends \
+            ack antlr3 asciidoc autoconf automake autopoint bc binutils bison build-essential \
+            bzip2 ca-certificates ccache clang cmake cpio curl device-tree-compiler dos2unix ecj fastjar file flex \
+            g++-multilib gawk gcc-multilib genisoimage gettext git gperf haveged help2man intltool jq \
+            lib32gcc-s1 libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libgnutls28-dev \
+            libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
+            libtool libyaml-dev lld llvm lrzsz msmtp nano ninja-build p7zip p7zip-full patch pkgconf \
+            python3 python3-cryptography python3-dev python3-docutils python3-packaging python3-ply \
+            python3-pyelftools python3-pip python3-setuptools qemu-utils re2c rsync scons squashfs-tools \
+            subversion swig texinfo uglifyjs unzip upx-ucl vim wget xmlto xz-utils xxd zlib1g-dev zstd
 
+          sudo timedatectl set-timezone "$TZ"
+
+          #编译目录放到 /mnt，避免 / 分区空间不足
           sudo mkdir -p /mnt/build_wrt
-          sudo chown $USER:$USER /mnt/build_wrt
-          sudo ln -s /mnt/build_wrt $GITHUB_WORKSPACE/wrt
+          sudo chown "$USER":"$USER" /mnt/build_wrt
+          sudo rm -rf "$GITHUB_WORKSPACE/wrt"
+          sudo ln -s /mnt/build_wrt "$GITHUB_WORKSPACE/wrt"
 
       - name: Initialization Values
         run: |
-          export WRT_DATE=$(TZ=UTC-8 date +"%y.%m.%d_%H.%M.%S")
-          export WRT_MARK=$(echo $GITHUB_REPOSITORY | cut -d '/' -f 1)
-          export WRT_VER=$(echo $WRT_REPO | cut -d '/' -f 5-)-$WRT_BRANCH
-          export WRT_TARGET=$(grep -m 1 -oP '^CONFIG_TARGET_\K[\w]+(?=\=y)' ./Config/$WRT_CONFIG.txt | tr '[:lower:]' '[:upper:]')
+          echo "WRT_DATE=$(date +'%y.%m.%d_%H.%M.%S')" >> "$GITHUB_ENV"
+          echo "WRT_MARK=${GITHUB_REPOSITORY%%/*}" >> "$GITHUB_ENV"
+          echo "WRT_VER=$(basename "$WRT_REPO" .git)-$WRT_BRANCH" >> "$GITHUB_ENV"
+          echo "WRT_TARGET=$(grep -m1 -oP '^CONFIG_TARGET_\K[\w]+(?=\=y)' "./Config/$WRT_CONFIG.txt" | tr '[:lower:]' '[:upper:]')" >> "$GITHUB_ENV"
 
-          echo "WRT_DATE=$WRT_DATE" >> $GITHUB_ENV
-          echo "WRT_MARK=$WRT_MARK" >> $GITHUB_ENV
-          echo "WRT_VER=$WRT_VER" >> $GITHUB_ENV
-          echo "WRT_TARGET=$WRT_TARGET" >> $GITHUB_ENV
+          #配置/脚本一改，缓存就换 key，避免拿到不匹配的 toolchain
+          echo "WRT_CFG_HASH=$(sha256sum Config/"$WRT_CONFIG".txt Config/GENERAL.txt Scripts/*.sh | sha256sum | cut -c1-8)" >> "$GITHUB_ENV"
 
       - name: Clone Code
         run: |
-          git clone --depth=1 --single-branch --branch $WRT_BRANCH $WRT_REPO ./wrt/
+          cd "$GITHUB_WORKSPACE"
+          for i in 1 2 3; do
+            if git clone --depth=1 --single-branch --branch "$WRT_BRANCH" "$WRT_REPO" ./wrt/; then
+              break
+            fi
+            if [ "$i" = "3" ]; then
+              echo "源码克隆失败：$WRT_REPO ($WRT_BRANCH)"
+              exit 1
+            fi
+            sudo find /mnt/build_wrt -mindepth 1 -delete 2>/dev/null || true
+            sleep $((i * 5))
+          done
 
-          cd ./wrt/ && echo "WRT_HASH=$(git log -1 --pretty=format:'%h')" >> $GITHUB_ENV
+          cd ./wrt/
+          echo "WRT_HASH=$(git log -1 --pretty=format:'%h')" >> "$GITHUB_ENV"
 
-          # GitHub Action 移除国内下载源
+          #GitHub 的机器在国外，去掉国内镜像源，避免拉取超时
           PROJECT_MIRRORS_FILE="./scripts/projectsmirrors.json"
           if [ -f "$PROJECT_MIRRORS_FILE" ]; then
-            sed -i '/.cn\//d; /tencent/d; /aliyun/d' "$PROJECT_MIRRORS_FILE"
+            jq '
+              with_entries(
+                .value |= map(select(
+                  test("^https?://(mirrors\\.tencent\\.com|mirrors\\.aliyun\\.com|mirrors\\.tuna\\.tsinghua\\.edu\\.cn|mirrors\\.ustc\\.edu\\.cn|mirror\\.iscas\\.ac\\.cn|mirror\\.nju\\.edu\\.cn)(/|$)")
+                  | not
+                ))
+              )
+            ' "$PROJECT_MIRRORS_FILE" > "$PROJECT_MIRRORS_FILE.tmp" \
+              && mv "$PROJECT_MIRRORS_FILE.tmp" "$PROJECT_MIRRORS_FILE" \
+              || echo "mirrors json 处理失败，保持原样"
           fi
+          sed -i '/raw\.gitmirror\.com/d' ./scripts/download.pl 2>/dev/null || true
 
       - name: Check Scripts
         run: |
-          find ./ -maxdepth 3 -type f -iregex ".*\(txt\|sh\)$" -exec dos2unix {} \; -exec chmod +x {} \;
+          find ./Config ./Scripts -maxdepth 3 -type f -iregex ".*\(txt\|sh\)$" -exec dos2unix {} \; -exec chmod +x {} \;
 
       - name: Check Caches
-        id: check-cache
+        id: cache
         if: env.WRT_TEST != 'true'
-        uses: actions/cache@main
+        uses: actions/cache@v4
         with:
-          key: ${{env.WRT_CONFIG}}-${{env.WRT_VER}}-${{env.WRT_HASH}}
-          restore-keys: ${{env.WRT_CONFIG}}-${{env.WRT_VER}}
+          key: ${{runner.os}}-24-${{env.WRT_CONFIG}}-${{env.WRT_VER}}-${{env.WRT_HASH}}-${{env.WRT_CFG_HASH}}
+          restore-keys: |
+            ${{runner.os}}-24-${{env.WRT_CONFIG}}-${{env.WRT_VER}}-${{env.WRT_HASH}}-
+            ${{runner.os}}-24-${{env.WRT_CONFIG}}-${{env.WRT_VER}}-
+            ${{runner.os}}-24-${{env.WRT_CONFIG}}-
           path: |
             ./wrt/.ccache
             ./wrt/staging_dir/host*
@@ -124,33 +157,33 @@ jobs:
       - name: Update Caches
         if: env.WRT_TEST != 'true'
         run: |
+          cd "$GITHUB_WORKSPACE"
+
           if [ -d "./wrt/staging_dir" ]; then
-            find "./wrt/staging_dir" -type d -name "stamp" -not -path "*target*" | while read -r DIR; do
-              find "$DIR" -type f -exec touch {} +
+            #缓存恢复出来的 host 工具与工具链，时间戳要比 stamp 新，否则会被重新编译
+            for DIR in ./wrt/staging_dir/host ./wrt/staging_dir/toolchain-*; do
+              [ -d "$DIR" ] || continue
+              [ -d "$DIR/stamp" ] && find "$DIR/stamp" -maxdepth 1 -type f -exec touch {} + 2>/dev/null
+              find "$DIR" -maxdepth 2 -type f -name ".*_compile*" -exec touch {} + 2>/dev/null
             done
-
-            mkdir -p ./wrt/tmp && echo "1" > ./wrt/tmp/.build
-
-            echo "toolchain skiped done!"
+            echo "toolchain cache restored"
           else
-            echo "caches missed!"
+            echo "caches missed"
           fi
 
-          if ${{steps.check-cache.outputs.cache-hit != 'true'}}; then
-            CACHE_LIST=$(gh cache list --key "$WRT_CONFIG-$WRT_VER" | cut -f 1)
-            for CACHE_KEY in $CACHE_LIST; do
-              gh cache delete $CACHE_KEY
-            done
-
-            echo "caches cleanup done!"
+          if [ "${{steps.cache.outputs.cache-hit}}" != "true" ]; then
+            CACHE_PREFIX="${{runner.os}}-24-$WRT_CONFIG-$WRT_VER-"
+            gh cache list --repo "$GITHUB_REPOSITORY" --key "$CACHE_PREFIX" --limit 100 --json id --jq '.[].id' 2>/dev/null \
+              | while read -r CACHE_ID; do
+                  [ -n "$CACHE_ID" ] && gh cache delete --repo "$GITHUB_REPOSITORY" "$CACHE_ID" || true
+                done
+            echo "old caches cleanup done"
           fi
 
       - name: Update Feeds
         run: |
           cd ./wrt/
-
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
 
       - name: Custom Packages
         run: |
@@ -159,28 +192,45 @@ jobs:
           $GITHUB_WORKSPACE/Scripts/Packages.sh
           $GITHUB_WORKSPACE/Scripts/Handles.sh
 
+      - name: Install Feeds
+        run: |
+          cd ./wrt/
+          #Packages.sh 里替换/删除过 feed 包，这里重新索引再安装，避免悬空的软链接
+          ./scripts/feeds update -i -a
+          ./scripts/feeds install -a
+
       - name: Custom Settings
         run: |
           cd ./wrt/
 
-          cat $GITHUB_WORKSPACE/Config/$WRT_CONFIG.txt $GITHUB_WORKSPACE/Config/GENERAL.txt >> .config
+          cat "$GITHUB_WORKSPACE/Config/$WRT_CONFIG.txt" "$GITHUB_WORKSPACE/Config/GENERAL.txt" >> .config
 
           $GITHUB_WORKSPACE/Scripts/Settings.sh
 
-          make defconfig -j$(nproc) && make clean -j$(nproc)
+          make defconfig -j$(nproc)
 
       - name: Download Packages
         if: env.WRT_TEST != 'true'
         run: |
           cd ./wrt/
 
-          make download -j$(nproc)
+          for i in 1 2 3; do
+            if make -j$(nproc) download; then
+              break
+            fi
+            if [ "$i" = "3" ]; then
+              echo "下载失败次数过多，改用单线程重试"
+              make -j1 V=s download
+              break
+            fi
+            find dl -type f -size -1024c -delete 2>/dev/null || true
+            sleep $((i * 5))
+          done
 
       - name: Compile Firmware
         if: env.WRT_TEST != 'true'
         run: |
           cd ./wrt/
-
           make -j$(nproc) || make -j1 V=s
 
       - name: Machine Information
@@ -197,30 +247,38 @@ jobs:
 
       - name: Package Firmware
         run: |
-          cd ./wrt/ && mkdir ./upload/
+          cd ./wrt/
+          mkdir -p ./upload/
 
           cp -f ./.config ./upload/Config_"$WRT_CONFIG"_"$WRT_VER"_"$WRT_DATE".txt
 
-          if [[ $WRT_TEST != 'true' ]]; then
-            KVER=$(find ./bin/targets/ -type f -name "*.manifest" -exec grep -oP '^kernel - \K[\d\.]+' {} \;)
-
-            find ./bin/targets/ -iregex ".*\(buildinfo\|json\|manifest\|sha256sums\|packages\)$" -exec rm -rf {} +
-
-            for FILE in $(find ./bin/targets/ -type f -iname "*$WRT_TARGET*") ; do
-              EXT=$(basename $FILE | cut -d '.' -f 2-)
-              NAME=$(basename $FILE | cut -d '.' -f 1 | grep -io "\($WRT_TARGET\).*")
-              NEW_FILE="$WRT_VER"_"$NAME"_"$WRT_DATE"."$EXT"
-              mv -f $FILE ./upload/$NEW_FILE
-            done
-
-            find ./bin/targets/ -type f -exec mv -f {} ./upload/ \;
-
-            make clean -j$(nproc)
+          if [ "$WRT_TEST" = "true" ]; then
+            exit 0
           fi
 
-          echo "WRT_KVER=${KVER:-none}" >> $GITHUB_ENV
+          KVER=$(find ./bin/targets/ -type f -name "*.manifest" -exec grep -h -oP '^kernel - \K[\d\.]+' {} \; 2>/dev/null | head -n 1)
+
+          #只搬固件镜像，名字带上源码版本+编译时间，方便区分
+          find ./bin/targets/ -type f \( -name "*.bin" -o -name "*.itb" -o -name "*.ubi" -o -name "*.img" -o -name "*.tar" -o -name "*.squashfs" \) | while read -r FILE; do
+            cp -f "$FILE" "./upload/${WRT_VER}_${WRT_DATE}_$(basename "$FILE")"
+          done
+
+          echo "WRT_KVER=${KVER:-none}" >> "$GITHUB_ENV"
+
+          echo "=========== upload ==========="
+          ls -lh ./upload/
+
+      - name: Upload Firmware Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{env.WRT_CONFIG}}-${{env.WRT_DATE}}
+          path: ./wrt/upload/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 5
 
       - name: Release Firmware
+        if: env.WRT_TEST != 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{env.WRT_CONFIG}}_${{env.WRT_VER}}_${{env.WRT_DATE}}
@@ -228,11 +286,14 @@ jobs:
           body: |
             这是个平台固件包，内含多个设备！
             请注意选择你需要的设备固件！
-            不要问，刷就完事了！
 
-            全系带开源硬件加速，别问了！
+            ### ⚠️ 京东云 AX6600（RE-CS-02 / 雅典娜）刷机前提
+            1. 必须是 **12M Kernel 分区表** 的机器（6M 分区表强刷会红灯，需要编程器救砖）
+            2. **先升级新版 u-boot**，再刷固件
+            3. 先进 u-boot Web 刷 `factory.bin`，再进 LuCI 用 sysupgrade 刷 `squashfs-sysupgrade.bin`，**不要勾选保留配置**
 
             内核版本：${{env.WRT_KVER}}
+            NSS：QCA NSS 12.5 硬件加速（ECM / crypto / WiFi 卸载）
 
             WIFI名称：${{env.WRT_SSID}}
             WIFI密码：${{env.WRT_WORD}}
