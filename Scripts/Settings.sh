@@ -70,6 +70,33 @@ if [[ $WRT_TARGET == *"QUALCOMMAX"* ]]; then
 	if grep -q '^CONFIG_TARGET_qualcommax_ipq60xx=y' ./.config; then
 		echo "CONFIG_ATH11K_MEM_PROFILE_512M=y" >> ./.config
 	fi
+
+	#AX6600 端口对调：2.5G（dp5 / qca8081）改叫 lan4 进 LAN，
+	#原 lan1（dp1）改叫 wan 当上行，lan2/lan3/lan4 依次前移成 lan1/lan2/lan3。
+	#netdev 名字来自 DTS 的 label，board.d 的 ucidef_set_interfaces_lan_wan
+	#（"lan1 lan2 lan3 lan4" "wan"）不用动，角色自然跟着走。
+	DTS_CS02="./target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6010-re-cs-02.dts"
+	#用 dp1 的当前 label 判断是否已换过，保证反复执行不会又换回去
+	if [ -f "$DTS_CS02" ] && grep -A3 '&dp1 {' "$DTS_CS02" | grep -q 'label = "lan1"'; then
+		sed -i \
+			-e 's/label = "lan1"/label = "__p1"/' \
+			-e 's/label = "lan2"/label = "__p2"/' \
+			-e 's/label = "lan3"/label = "__p3"/' \
+			-e 's/label = "lan4"/label = "__p4"/' \
+			-e 's/label = "wan"/label = "__p5"/' \
+			-e 's/label = "__p1"/label = "wan"/' \
+			-e 's/label = "__p2"/label = "lan1"/' \
+			-e 's/label = "__p3"/label = "lan2"/' \
+			-e 's/label = "__p4"/label = "lan3"/' \
+			-e 's/label = "__p5"/label = "lan4"/' \
+			"$DTS_CS02"
+		#校验：dp1 必须是 wan，dp5 必须是 lan4
+		if ! grep -A3 '&dp1 {' "$DTS_CS02" | grep -q 'label = "wan"' ||
+		   ! grep -A4 '&dp5 {' "$DTS_CS02" | grep -q 'label = "lan4"'; then
+			echo "ERROR: AX6600 DTS 端口对调失败（dp1 应为 wan，dp5 应为 lan4）"
+			exit 1
+		fi
+	fi
 fi
 
 #=====================================================================
