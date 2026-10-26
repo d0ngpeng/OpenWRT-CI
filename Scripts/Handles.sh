@@ -40,6 +40,28 @@ if [ -n "$HP_PATH" ]; then
 fi
 
 #=====================================================================
+#Tailscale：asvow 的 LuCI 包自带 /etc/config/tailscale 和 /etc/init.d/tailscale
+#（带 exit node / subnet routes 那套完整参数），feeds 里的 tailscale 包也装
+#同样两个文件，apk 会报 "trying to overwrite ... owned by tailscale"，整个
+#package/install 阶段失败——表现为 make world 失败但日志里没有 ERROR 行。
+#让 feeds 的包只提供 tailscaled 二进制，配置和服务脚本交给 LuCI 包。
+#=====================================================================
+TS_MK="../feeds/packages/net/tailscale/Makefile"
+if [ -f "$TS_MK" ]; then
+	sed -i \
+		-e '/tailscale\.init \$(1)\/etc\/init\.d\/tailscale/d' \
+		-e '/tailscale\.conf \$(1)\/etc\/config\/tailscale/d' \
+		-e '\#^/etc/config/tailscale$#d' \
+		"$TS_MK"
+	#改不动就直接失败：否则要等一个多小时编到 install 阶段才炸
+	if grep -q 'etc/config/tailscale\|etc/init\.d/tailscale' "$TS_MK"; then
+		echo "tailscale 去重失败：$TS_MK 里仍有安装 /etc/config/tailscale 的规则"
+		exit 1
+	fi
+	echo "tailscale 与 luci-app-tailscale 的配置文件冲突已处理"
+fi
+
+#=====================================================================
 #修改 argon 主题字体和颜色
 #=====================================================================
 ARGON_DIR=$(find . -maxdepth 2 -type d -name "luci-app-argon-config" 2>/dev/null | head -n 1 || true)
