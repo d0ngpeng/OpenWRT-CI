@@ -61,6 +61,10 @@ jobs:
       #WiFi 密码只从仓库 Secret 读：仓库是公开的，密码写进代码等于公开
       #没配 Secret 时用兜底密码，固件不会变成开放网络
       WRT_WORD: ${{secrets.WRT_WORD || '12345678'}}
+      #Go 模块下载源：proxy.golang.org 在这里（IPv6）经常 i/o timeout，要走国内镜像
+      GOPROXY: https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,direct
+      GOSUMDB: https://sum.golang.org
+      GOFLAGS: -mod=mod
     steps:
       - name: Checkout Projects
         uses: actions/checkout@v4
