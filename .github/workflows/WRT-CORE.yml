@@ -61,10 +61,11 @@ jobs:
       #WiFi 密码只从仓库 Secret 读：仓库是公开的，密码写进代码等于公开
       #没配 Secret 时用兜底密码，固件不会变成开放网络
       WRT_WORD: ${{secrets.WRT_WORD || '12345678'}}
-      #Go 模块下载源：proxy.golang.org 在这里（IPv6）经常 i/o timeout，要走国内镜像
-      GOPROXY: https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,direct
-      GOSUMDB: https://sum.golang.org
-      GOFLAGS: -mod=mod
+      #Go 模块下载源：GitHub runner 直连官方源最快，官方源不可用时才退到镜像。
+      #不要用 goproxy.cn / aliyun：它们缓存的 moby/buildkit v0.29.0 与官方 sumdb 不一致，
+      #会导致 "checksum mismatch ... SECURITY ERROR"，docker-compose 必然编不过。
+      GOPROXY: https://proxy.golang.org,https://goproxy.io,https://mirrors.cloud.tencent.com/go,direct
+      GOSUMDB: sum.golang.org
     steps:
       - name: Checkout Projects
         uses: actions/checkout@v4
@@ -254,6 +255,17 @@ jobs:
             grep -nE "ERROR: |Error [12]$|\*\*\* .*Error|No space left|is too big|failed to build" /tmp/build.log | tail -60 || true
           } >> /tmp/build-tail.log
           echo "tail 大小：$(du -h /tmp/build-tail.log | cut -f1)"
+
+          #错误摘要直接写进 Job Summary：公开仓库的运行页面不用登录就能看到失败原因，
+          #不用再去下载（需要登录的）log artifact
+          {
+            echo "### 编译失败：$WRT_CONFIG / $WRT_VER / ${WRT_HASH:-unknown}"
+            echo '```text'
+            grep -E "ERROR: |Error [12]$|\*\*\* .*Error|No space left|is too big|failed to build|checksum mismatch|SECURITY ERROR|undefined reference" /tmp/build.log | tail -25 || true
+            echo '--- 日志最后 25 行 ---'
+            tail -n 25 /tmp/build.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Build Log
         if: failure() && env.WRT_TEST != 'true'
