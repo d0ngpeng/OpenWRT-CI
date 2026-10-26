@@ -19,6 +19,7 @@ GWRT V2（京东云深度定制版）就是基于它做的。原来的 `VIKINGYF
 | 主题 | argon（`openwrt-25.12` 分支，apk 兼容） |
 | 默认地址 | `http://10.25.1.1`，root 无密码 |
 | 默认 WiFi | `PENG-ROUTER` / 密码放在仓库 Secret `WRT_WORD`（不写进代码） |
+| 网口 | **`lan4` = 2.5G 口（qca8081，在 LAN 里）**；**`wan` = 机身丝印 LAN1**（上行/PPPoE 插这个）；丝印 LAN2/LAN3/LAN4 = `lan1`/`lan2`/`lan3` |
 
 ## ⚠️ 刷机前提
 
