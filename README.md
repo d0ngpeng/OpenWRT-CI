@@ -17,7 +17,7 @@ GWRT V2（京东云深度定制版）就是基于它做的。原来的 `VIKINGYF
 | WiFi | ath11k，`ATH11K_MEM_PROFILE_512M`（三 radio 必须） |
 | 蓝牙/LED | `luci-app-athena-led`（雅典娜灯控） |
 | 主题 | argon（`openwrt-25.12` 分支，apk 兼容） |
-| 默认地址 | `http://10.25.0.1`，root 无密码 |
+| 默认地址 | `http://10.25.1.1`，root 无密码 |
 | 默认 WiFi | `PENG-ROUTER` / 密码放在仓库 Secret `WRT_WORD`（不写进代码） |
 
 ## ⚠️ 刷机前提
@@ -26,9 +26,11 @@ GWRT V2（京东云深度定制版）就是基于它做的。原来的 `VIKINGYF
    如果机器之前刷过 12M 布局的固件，先到 u-boot 的 `/img.html` 刷 6M 分区表（rootfs 1024M 或 2048M）再刷固件。
 2. u-boot 需 **2024.05.10** 及以上（进 `/uboot.html` 看版本号，已经是这版就不用动）。
 3. 刷机前务必备份 `0:APPSBL`、`0:APPSBL_1`、`0:ART`、`0:CDT` 和 GPT，出问题才救得回来。
-4. 进 u-boot Web 刷 `*factory.bin`，然后进 LuCI 用 sysupgrade 刷 `*squashfs-sysupgrade.bin`，
-   **不要勾选保留配置**。
-5. 5.2G HE160 走 DFS-CAC，开机后要等 60 秒左右才出 WiFi，不是坏了。
+4. 在 u-boot Web **首页 `/`（Firmware update，字段 `firmware`）** 刷 `*factory.bin`，重启即可用；
+   之后要再刷同一版本才进 LuCI 用 sysupgrade 刷 `*squashfs-sysupgrade.bin`，**不要勾选保留配置**。
+   （`/img.html` 只用于刷 GPT / 整盘镜像，不要拿它刷 `factory.bin`。）
+5. 5G 默认 **HE80**：radio0 走 ch100（DFS-CAC，开机后要等 60 秒左右才出 WiFi，不是坏了），
+   radio2 走 ch36。要 160MHz 自己在 LuCI 里把 `htmode` 改成 `HE160`。
 
 > u-boot / GPT 在 GWRT 网盘：<https://p.godsun.pro>（需要 GitHub 登录）。
 

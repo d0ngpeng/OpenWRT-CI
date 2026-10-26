@@ -350,8 +350,8 @@ jobs:
             1. 本固件内核按 **6M（6144k）** 生成（`KERNEL_SIZE := 6144k`），对应社区 **6M 分区表**；如果机器之前刷过 12M 布局的固件，先到 u-boot 的 `/img.html` 刷 6M 分区表（rootfs 1024M 或 2048M）再刷固件
             2. u-boot 需 **2024.05.10** 及以上（进 `/uboot.html` 看版本号，已经是这版就不用动）
             3. 刷机前务必备份 `0:APPSBL`、`0:APPSBL_1`、`0:ART`、`0:CDT` 和 GPT，出问题才救得回来
-            4. 先进 u-boot Web 刷 `factory.bin`，重启进 LuCI 后用 sysupgrade 刷 `squashfs-sysupgrade.bin`，**不要勾选保留配置**
-            5. 三 radio 首次起 5.2G/HE160 要等 DFS-CAC（约 60 秒）才会出现
+            4. 在 u-boot Web **首页 `/`（Firmware update，字段 `firmware`）** 刷 `factory.bin`，重启即可用；之后要再刷才进 LuCI 用 sysupgrade 刷 `squashfs-sysupgrade.bin`，**不要勾选保留配置**。`/img.html` 只用于刷 GPT / 整盘镜像，不要拿它刷 `factory.bin`
+            5. 5G 默认 **HE80**：radio0 走 ch100（DFS-CAC，开机约 60 秒才出 WiFi，不是坏了），radio2 走 ch36；要 160MHz 在 LuCI 里把 `htmode` 改成 `HE160`
 
             内核版本：${{env.WRT_KVER}}
             NSS：QCA NSS 12.5 硬件加速（ECM / crypto / WiFi 卸载）
