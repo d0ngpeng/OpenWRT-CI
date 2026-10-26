@@ -16,9 +16,6 @@ on:
       WRT_SSID:
         required: true
         type: string
-      WRT_WORD:
-        required: true
-        type: string
       WRT_IP:
         required: true
         type: string
@@ -47,7 +44,6 @@ env:
   WRT_THEME: ${{inputs.WRT_THEME}}
   WRT_NAME: ${{inputs.WRT_NAME}}
   WRT_SSID: ${{inputs.WRT_SSID}}
-  WRT_WORD: ${{inputs.WRT_WORD}}
   WRT_IP: ${{inputs.WRT_IP}}
   WRT_PW: ${{inputs.WRT_PW}}
   WRT_REPO: ${{inputs.WRT_REPO}}
@@ -61,6 +57,10 @@ jobs:
     name: ${{inputs.WRT_SOURCE || inputs.WRT_REPO}}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    env:
+      #WiFi 密码只从仓库 Secret 读：仓库是公开的，密码写进代码等于公开
+      #没配 Secret 时用兜底密码，固件不会变成开放网络
+      WRT_WORD: ${{secrets.WRT_WORD || '12345678'}}
     steps:
       - name: Checkout Projects
         uses: actions/checkout@v4
@@ -234,9 +234,11 @@ jobs:
 
       - name: Compile Firmware
         if: env.WRT_TEST != 'true'
+        shell: bash
         run: |
           cd ./wrt/
-          #日志落盘，失败时下一步会上传，省得在网页里翻几万行
+          #tee 会把 make 的退出码吞掉（没有 pipefail 时整个管道算成功），必须显式打开
+          set -o pipefail
           make -j$(nproc) 2>&1 | tee /tmp/build.log
 
       - name: Collect Build Log
@@ -281,7 +283,7 @@ jobs:
             exit 0
           fi
 
-          KVER=$(find ./bin/targets/ -type f -name "*.manifest" -exec grep -h -oP '^kernel - \K[\d\.]+' {} \; 2>/dev/null | head -n 1)
+          KVER=$(cat ./bin/targets/*/*/profiles.json 2>/dev/null | jq -r '.linux_kernel.version // empty' 2>/dev/null | head -n 1)
 
           #只搬固件镜像，名字带上源码版本+编译时间，方便区分
           find ./bin/targets/ -type f \( -name "*.bin" -o -name "*.itb" -o -name "*.ubi" -o -name "*.img" -o -name "*.tar" -o -name "*.squashfs" \) | while read -r FILE; do
@@ -290,8 +292,19 @@ jobs:
 
           echo "WRT_KVER=${KVER:-none}" >> "$GITHUB_ENV"
 
+          echo "=========== 磁盘 ==========="
+          df -h / /mnt 2>/dev/null || df -h
+          echo "=========== bin/targets ==========="
+          ls -1 ./bin/targets/*/*/ 2>/dev/null | head -40 || echo "(bin/targets 不存在)"
           echo "=========== upload ==========="
           ls -lh ./upload/
+
+          #没生成固件就当场失败：否则会发一个只有配置文件、没有固件的 release
+          if ! ls ./upload/*.bin ./upload/*.itb ./upload/*.img >/dev/null 2>&1; then
+            echo "::error::一个固件镜像都没生成，编译其实没走完（看下面日志尾巴）"
+            tail -n 80 /tmp/build.log 2>/dev/null || true
+            exit 1
+          fi
 
       - name: Upload Firmware Artifact
         uses: actions/upload-artifact@v4
@@ -323,7 +336,7 @@ jobs:
             NSS：QCA NSS 12.5 硬件加速（ECM / crypto / WiFi 卸载）
 
             WIFI名称：${{env.WRT_SSID}}
-            WIFI密码：${{env.WRT_WORD}}
+            WIFI密码：见仓库 Secret（不在此公开）
 
             源码：${{env.WRT_REPO}}
             分支：${{env.WRT_BRANCH}}

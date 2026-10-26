@@ -39,6 +39,8 @@ jobs:
 
     #调用公用编译核心WRT-CORE.yml
     uses: ./.github/workflows/WRT-CORE.yml
+    #把仓库 Secret（含 WiFi 密码 WRT_WORD）传给核心工作流
+    secrets: inherit
     with:
       #编译配置
       WRT_CONFIG: ${{matrix.CONFIG}}
@@ -48,8 +50,6 @@ jobs:
       WRT_NAME: PENG-ROUTER
       #默认WIFI名称
       WRT_SSID: PENG-ROUTER
-      #默认WIFI密码
-      WRT_WORD: dong3peng2
       #默认地址（必须是内网网段，别用 110.x 这种公网地址）
       WRT_IP: 10.25.0.1
       #默认密码，仅作提示，修改无用

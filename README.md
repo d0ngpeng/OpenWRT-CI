@@ -18,17 +18,19 @@ GWRT V2（京东云深度定制版）就是基于它做的。原来的 `VIKINGYF
 | 蓝牙/LED | `luci-app-athena-led`（雅典娜灯控） |
 | 主题 | argon（`openwrt-25.12` 分支，apk 兼容） |
 | 默认地址 | `http://10.25.0.1`，root 无密码 |
-| 默认 WiFi | `PENG-ROUTER` / `dong3peng2` |
+| 默认 WiFi | `PENG-ROUTER` / 密码放在仓库 Secret `WRT_WORD`（不写进代码） |
 
-## ⚠️ 刷机前提（照 GWRT 的硬要求）
+## ⚠️ 刷机前提
 
-1. **必须是 12M Kernel 分区表**的机器。6M 分区表强刷上去红灯不开机，只能拆机编程器救。
-2. **先升级新版 u-boot**，再刷固件，顺序别反。
-3. 进 u-boot Web 刷 `*factory.bin`，然后进 LuCI 用 sysupgrade 刷 `*squashfs-sysupgrade.bin`，
+1. 本固件内核按 **6M（6144k）** 生成（`KERNEL_SIZE := 6144k`），对应社区 **6M 分区表**。
+   如果机器之前刷过 12M 布局的固件，先到 u-boot 的 `/img.html` 刷 6M 分区表（rootfs 1024M 或 2048M）再刷固件。
+2. u-boot 需 **2024.05.10** 及以上（进 `/uboot.html` 看版本号，已经是这版就不用动）。
+3. 刷机前务必备份 `0:APPSBL`、`0:APPSBL_1`、`0:ART`、`0:CDT` 和 GPT，出问题才救得回来。
+4. 进 u-boot Web 刷 `*factory.bin`，然后进 LuCI 用 sysupgrade 刷 `*squashfs-sysupgrade.bin`，
    **不要勾选保留配置**。
-4. 5.2G HE160 走 DFS-CAC，开机后要等 60 秒左右才出 WiFi，不是坏了。
+5. 5.2G HE160 走 DFS-CAC，开机后要等 60 秒左右才出 WiFi，不是坏了。
 
-> 12M 分区表 / u-boot / GPT 在 GWRT 网盘：<https://p.godsun.pro>（需要 GitHub 登录）。
+> u-boot / GPT 在 GWRT 网盘：<https://p.godsun.pro>（需要 GitHub 登录）。
 
 ## 怎么触发编译
 
