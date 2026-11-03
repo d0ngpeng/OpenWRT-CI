@@ -65,6 +65,30 @@ EOS
 fi
 
 #=====================================================================
+#5G 默认信道修正：
+#wifi-detect.uc 从硬件能力里挑 default_channel，AX6600 的 phy0 会被挑到
+#100（5500MHz，DFS/RADAR），hostapd 在 AP 模式下直接拒绝：
+#  "Frequency 5500 (primary) not allowed for AP mode, flags: RADAR"
+#首次启动后把 5G 射频的 DFS 信道改成 149（非 DFS）。
+#=====================================================================
+mkdir -p ./package/base-files/files/etc/uci-defaults
+cat > ./package/base-files/files/etc/uci-defaults/99-wifi-channel <<'EOS'
+#!/bin/sh
+#把 5G 射频上的 DFS 信道换成非 DFS 信道，否则 hostapd 起不来
+for s in $(uci show wireless 2>/dev/null | sed -n "s/^wireless\.\([^.=]*\)=wifi-device$/\1/p"); do
+	[ "$(uci -q get wireless.$s.band)" = "5g" ] || continue
+	case "$(uci -q get wireless.$s.channel)" in
+		52|56|60|64|100|104|108|112|116|120|124|128|132|136|140|144)
+			uci -q set wireless.$s.channel='149'
+			;;
+	esac
+done
+uci -q commit wireless
+exit 0
+EOS
+chmod 0755 ./package/base-files/files/etc/uci-defaults/99-wifi-channel
+
+#=====================================================================
 #基础包
 #=====================================================================
 {
@@ -151,20 +175,29 @@ ovl_test() {
 	return 1
 }
 
+log() {
+	logger -t docker_data "$*"
+}
+
 start() {
+	local cur
+	cur=$(awk '$2 == "/opt/docker" { print $1" "$3 }' /proc/mounts)
+	log "entry: /opt/docker mounted as: ${cur:-none}"
+
 	[ -d /opt/docker ] || mkdir -p /opt/docker
 
-	#已经单独挂载过就不重复挂
-	if awk '$2 == "/opt/docker" { found = 1 } END { exit !found }' /proc/mounts; then
-		return 0
+	#不管谁先挂了 /opt/docker（首启实测会被挂成 overlay），先卸掉重挂
+	if [ -n "$cur" ]; then
+		umount /opt/docker 2>/dev/null || umount -l /opt/docker 2>/dev/null
 	fi
 
 	if [ -d /overlay/upper ]; then
 		mkdir -p /overlay/upper/opt/docker
 		if mount --bind /overlay/upper/opt/docker /opt/docker && ovl_test; then
-			logger -t docker_data "data-root 已挂到 f2fs：/overlay/upper/opt/docker"
+			log "ok: /opt/docker -> f2fs (/overlay/upper/opt/docker), now: $(awk '$2 == "/opt/docker" { print $1" "$3 }' /proc/mounts)"
 			return 0
 		fi
+		umount /opt/docker 2>/dev/null
 	fi
 
 	#兜底：overlay 用不了就用 vfs 驱动，至少容器能建起来（慢、占空间）
