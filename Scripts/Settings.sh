@@ -68,28 +68,49 @@ EOS
 fi
 
 #=====================================================================
-#5G 默认信道修正：
-#wifi-detect.uc 从硬件能力里挑 default_channel，AX6600 的 phy0 会被挑到
-#100（5500MHz，DFS/RADAR），hostapd 在 AP 模式下直接拒绝：
-#  "Frequency 5500 (primary) not allowed for AP mode, flags: RADAR"
-#首次启动后把 5G 射频的 DFS 信道改成 149（非 DFS）。
+#无线默认值修正（首次启动执行一次）：
+#1) 5G 射频的 default_channel 由 wifi-detect.uc 从硬件能力探测，AX6600 的 phy0
+#   会落到 100（5500MHz，DFS/RADAR），hostapd 在 AP 模式下直接拒绝：
+#   "Frequency 5500 (primary) not allowed for AP mode, flags: RADAR"。
+#2) 2.4G 默认 ch1，在密集住宅区同信道邻区极多（实测 33 个、占用 59%），改 ch6。
+#3) 5G 的 dtim_period=1，降低省电客户端的唤醒抖动（游戏延迟更稳）。
+#4) disassoc_low_ack=0，避免丢几个 ACK 就把客户端踢下线。
+#5) 2.4G 单独 SSID（后缀 -2G），避免客户端在没有 band steering 时停在 2.4G。
 #=====================================================================
 mkdir -p ./package/base-files/files/etc/uci-defaults
-cat > ./package/base-files/files/etc/uci-defaults/99-wifi-channel <<'EOS'
+cat > ./package/base-files/files/etc/uci-defaults/99-wifi-tuning <<'EOS'
 #!/bin/sh
-#把 5G 射频上的 DFS 信道换成非 DFS 信道，否则 hostapd 起不来
+#无线默认值修正：DFS 信道 / 2.4G 信道 / dtim / low_ack / 2.4G 独立 SSID
 for s in $(uci show wireless 2>/dev/null | sed -n "s/^wireless\.\([^.=]*\)=wifi-device$/\1/p"); do
-	[ "$(uci -q get wireless.$s.band)" = "5g" ] || continue
-	case "$(uci -q get wireless.$s.channel)" in
-		52|56|60|64|100|104|108|112|116|120|124|128|132|136|140|144)
-			uci -q set wireless.$s.channel='149'
-			;;
-	esac
+	band="$(uci -q get wireless.$s.band)"
+	ch="$(uci -q get wireless.$s.channel)"
+	if [ "$band" = "5g" ]; then
+		case "$ch" in
+			52|56|60|64|100|104|108|112|116|120|124|128|132|136|140|144)
+				uci -q set wireless.$s.channel='149'
+				;;
+		esac
+	elif [ "$band" = "2g" ] && [ "$ch" = "1" ]; then
+		uci -q set wireless.$s.channel='6'
+	fi
+done
+for i in $(uci show wireless 2>/dev/null | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do
+	uci -q set wireless.$i.disassoc_low_ack='0'
+	dev="$(uci -q get wireless.$i.device)"
+	if [ "$(uci -q get wireless.$dev.band)" = "5g" ]; then
+		uci -q set wireless.$i.dtim_period='1'
+	elif [ "$(uci -q get wireless.$dev.band)" = "2g" ]; then
+		ssid="$(uci -q get wireless.$i.ssid)"
+		case "$ssid" in
+			*-2G|"") ;;
+			*) uci -q set wireless.$i.ssid="$ssid-2G" ;;
+		esac
+	fi
 done
 uci -q commit wireless
 exit 0
 EOS
-chmod 0755 ./package/base-files/files/etc/uci-defaults/99-wifi-channel
+chmod 0755 ./package/base-files/files/etc/uci-defaults/99-wifi-tuning
 
 #=====================================================================
 #基础包
