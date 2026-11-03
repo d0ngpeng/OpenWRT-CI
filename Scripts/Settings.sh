@@ -75,12 +75,12 @@ fi
 #2) 2.4G 默认 ch1，在密集住宅区同信道邻区极多（实测 33 个、占用 59%），改 ch6。
 #3) 5G 的 dtim_period=1，降低省电客户端的唤醒抖动（游戏延迟更稳）。
 #4) disassoc_low_ack=0，避免丢几个 ACK 就把客户端踢下线。
-#5) 2.4G 单独 SSID（后缀 -2G），避免客户端在没有 band steering 时停在 2.4G。
 #=====================================================================
 mkdir -p ./package/base-files/files/etc/uci-defaults
 cat > ./package/base-files/files/etc/uci-defaults/99-wifi-tuning <<'EOS'
 #!/bin/sh
-#无线默认值修正：DFS 信道 / 2.4G 信道 / dtim / low_ack / 2.4G 独立 SSID
+#无线默认值修正：DFS 信道 / 2.4G 信道 / dtim / low_ack
+#主路由模式下三个射频用同一个 SSID，交给终端自己选择频段。
 for s in $(uci show wireless 2>/dev/null | sed -n "s/^wireless\.\([^.=]*\)=wifi-device$/\1/p"); do
 	band="$(uci -q get wireless.$s.band)"
 	ch="$(uci -q get wireless.$s.channel)"
@@ -97,15 +97,7 @@ done
 for i in $(uci show wireless 2>/dev/null | sed -n "s/^wireless\.\([^.=]*\)=wifi-iface$/\1/p"); do
 	uci -q set wireless.$i.disassoc_low_ack='0'
 	dev="$(uci -q get wireless.$i.device)"
-	if [ "$(uci -q get wireless.$dev.band)" = "5g" ]; then
-		uci -q set wireless.$i.dtim_period='1'
-	elif [ "$(uci -q get wireless.$dev.band)" = "2g" ]; then
-		ssid="$(uci -q get wireless.$i.ssid)"
-		case "$ssid" in
-			*-2G|"") ;;
-			*) uci -q set wireless.$i.ssid="$ssid-2G" ;;
-		esac
-	fi
+	[ "$(uci -q get wireless.$dev.band)" = "5g" ] && uci -q set wireless.$i.dtim_period='1'
 done
 uci -q commit wireless
 exit 0
