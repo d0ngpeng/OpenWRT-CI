@@ -53,10 +53,13 @@ if [ "$WRT_MODE" = "bypass" ]; then
 	mkdir -p ./package/base-files/files/etc/uci-defaults
 	cat > ./package/base-files/files/etc/uci-defaults/99-bypass <<EOS
 #!/bin/sh
-#旁路由：上行和 DNS 走现有主路由，本机不发 DHCP
+#旁路由：上行和 DNS 走现有主路由，本机不发 DHCP/RA
 uci -q set network.lan.gateway='$WRT_GW'
 uci -q set network.lan.dns='$WRT_GW'
 uci -q set dhcp.lan.ignore='1'
+uci -q set dhcp.lan.ra='disabled'
+uci -q set dhcp.lan.dhcpv6='disabled'
+uci -q set dhcp.lan.ndp='disabled'
 uci -q commit network
 uci -q commit dhcp
 exit 0
