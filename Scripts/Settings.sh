@@ -43,6 +43,28 @@ if [ -f "$CFG_FILE" ]; then
 fi
 
 #=====================================================================
+#旁路由模式（WRT_MODE=bypass）：
+#设备接在现有网络里，自己的默认路由/DNS 指向现有主路由，
+#并关掉本机 DHCP，避免和主路由抢着发地址。
+#用 uci-defaults 做，首次启动（factory 刷完）时执行。
+#=====================================================================
+if [ "$WRT_MODE" = "bypass" ]; then
+	WRT_GW="${WRT_GW:-10.25.0.1}"
+	mkdir -p ./package/base-files/files/etc/uci-defaults
+	cat > ./package/base-files/files/etc/uci-defaults/99-bypass <<EOS
+#!/bin/sh
+#旁路由：上行和 DNS 走现有主路由，本机不发 DHCP
+uci -q set network.lan.gateway='$WRT_GW'
+uci -q set network.lan.dns='$WRT_GW'
+uci -q set dhcp.lan.ignore='1'
+uci -q commit network
+uci -q commit dhcp
+exit 0
+EOS
+	chmod 0755 ./package/base-files/files/etc/uci-defaults/99-bypass
+fi
+
+#=====================================================================
 #基础包
 #=====================================================================
 {
@@ -96,6 +118,63 @@ if [[ $WRT_TARGET == *"QUALCOMMAX"* ]]; then
 			echo "ERROR: AX6600 DTS 端口对调失败（dp1 应为 wan，dp5 应为 lan4）"
 			exit 1
 		fi
+	fi
+
+	#Docker 的 data-root 必须落在真实文件系统上：
+	#OpenWrt 的 / 是 overlayfs（lower=/rom，upper=/overlay/upper 在 f2fs 上），
+	#dockerman 默认 data-root=/opt/docker 因此建在 overlayfs 上，Docker/containerd
+	#的 overlay2 再叠一层 overlay 会被内核拒绝（mount: invalid argument）。
+	#启动 dockerd 之前把 /opt/docker bind 到 f2fs 上的真实目录即可。
+	if grep -q '^CONFIG_PACKAGE_dockerd=y' ./.config; then
+		cat > "./package/base-files/files/etc/init.d/docker_data" <<'EOS'
+#!/bin/sh /etc/rc.common
+#把 docker 的 data-root 放到真实文件系统上，避免 overlay 套 overlay。
+#OpenWrt 的 / 是 overlayfs，upperdir=/overlay/upper（f2fs）。
+START=98
+
+boot() {
+	start
+}
+
+#在目标文件系统上试挂一次 overlay，确认内核允许
+ovl_test() {
+	local t=/overlay/upper/.docker_ovl_test
+	rm -rf "$t"
+	mkdir -p "$t/lower" "$t/upper" "$t/work" "$t/merged" || return 1
+	if mount -t overlay overlay \
+		-o "lowerdir=$t/lower,upperdir=$t/upper,workdir=$t/work" "$t/merged"; then
+		umount "$t/merged" 2>/dev/null
+		rm -rf "$t"
+		return 0
+	fi
+	rm -rf "$t"
+	return 1
+}
+
+start() {
+	[ -d /opt/docker ] || mkdir -p /opt/docker
+
+	#已经单独挂载过就不重复挂
+	if awk '$2 == "/opt/docker" { found = 1 } END { exit !found }' /proc/mounts; then
+		return 0
+	fi
+
+	if [ -d /overlay/upper ]; then
+		mkdir -p /overlay/upper/opt/docker
+		if mount --bind /overlay/upper/opt/docker /opt/docker && ovl_test; then
+			logger -t docker_data "data-root 已挂到 f2fs：/overlay/upper/opt/docker"
+			return 0
+		fi
+	fi
+
+	#兜底：overlay 用不了就用 vfs 驱动，至少容器能建起来（慢、占空间）
+	logger -t docker_data "warn: overlay 在 /opt/docker 上不可用，回退 storage-driver=vfs"
+	uci -q set dockerd.globals.storage_driver='vfs'
+	uci -q commit dockerd
+	return 0
+}
+EOS
+		chmod 0755 "./package/base-files/files/etc/init.d/docker_data"
 	fi
 fi
 

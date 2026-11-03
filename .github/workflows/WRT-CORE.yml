@@ -37,6 +37,13 @@ on:
       WRT_TEST:
         required: false
         type: string
+      WRT_MODE:
+        required: false
+        type: string
+        default: router
+      WRT_GW:
+        required: false
+        type: string
 
 env:
   GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
@@ -50,6 +57,8 @@ env:
   WRT_BRANCH: ${{inputs.WRT_BRANCH}}
   WRT_PACKAGE: ${{inputs.WRT_PACKAGE}}
   WRT_TEST: ${{inputs.WRT_TEST}}
+  WRT_MODE: ${{inputs.WRT_MODE}}
+  WRT_GW: ${{inputs.WRT_GW}}
   TZ: Asia/Shanghai
 
 jobs:

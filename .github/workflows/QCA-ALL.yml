@@ -49,9 +49,13 @@ jobs:
       #默认主机名
       WRT_NAME: PENG-ROUTER
       #默认WIFI名称
-      WRT_SSID: PENG-ROUTER
+      WRT_SSID: PENG-ROUTER-TEST
       #默认地址（必须是内网网段，别用 110.x 这种公网地址）
-      WRT_IP: 10.25.1.1
+      WRT_IP: 10.25.0.2
+      #bypass=旁路由（自己走主路由上网、关本机 DHCP）；router=主路由
+      WRT_MODE: bypass
+      #旁路由模式下自己的网关/DNS
+      WRT_GW: 10.25.0.1
       #默认密码，仅作提示，修改无用
       WRT_PW: 无
       #源码链接
